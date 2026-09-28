@@ -1,6 +1,8 @@
 import pygame
 import time
 import random
+import sqlite3
+import os
 
 pygame.init()
 white = (255, 255, 255)
@@ -17,8 +19,45 @@ clock = pygame.time.Clock()
 snake_block = 50
 snake_speed = 8
 font_style = pygame.font.SysFont("bahnschrift", 28)
-score_font = pygame.font.SysFont("comicsansms", 40)
- 
+score_font = pygame.font.SysFont("comicsansms", 36)
+
+DB_NAME = "snake_scores.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS players (
+            name TEXT PRIMARY KEY,
+            score INTEGER DEFAULT 0
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def get_high_score(player_name):
+    if not player_name:
+        return 0
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT score FROM players WHERE name = ?", (player_name,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return row[0]
+    return 0
+
+def save_high_score(player_name, new_score):
+    if not player_name:
+        return
+    current_high = get_high_score(player_name)
+    if new_score > current_high:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO players (name, score) VALUES (?, ?)", (player_name, new_score))
+        conn.commit()
+        conn.close()
+
 sprite_size = int(snake_block * 1.25)  
 travka_img = pygame.image.load('travka.png').convert()
 travka_img = pygame.transform.scale(travka_img, (dis_width, dis_height))
@@ -50,8 +89,8 @@ def draw_environment():
         dis.blit(wall_tile, (0, y))
         dis.blit(wall_tile, (dis_width - snake_block, y))
 
-def Your_score(score):
-    value = score_font.render("Ваш счёт: " + str(score), True, yellow)
+def Your_score(score, player_name, high_score):
+    value = font_style.render(f"Игрок: {player_name}  |  Счёт: {score}  |  Рекорд: {high_score}", True, yellow)
     dis.blit(value, [snake_block + 15, 10])
 
 def get_rotation(dx, dy):
@@ -102,14 +141,55 @@ def our_snake(snake_block, snake_list, x1_change, y1_change):
 
 def message(msg, color):
     mesg = font_style.render(msg, True, color)
-    dis.blit(mesg, [dis_width / 6, dis_height / 3])
+    dis.blit(mesg, [dis_width / 8, dis_height / 3])
 
 def spawn_food():
     foodx = round(random.randrange(snake_block, dis_width - 2 * snake_block) / float(snake_block)) * snake_block
     foody = round(random.randrange(snake_block, dis_height - 2 * snake_block) / float(snake_block)) * snake_block
     return [foodx, foody]
 
-def gameLoop():
+def get_player_name():
+    player_name = ""
+    name_input_active = True
+    
+    while name_input_active:
+        draw_environment()
+        
+        title_txt = score_font.render("Змейка Бог Пожиратель Крипов", True, yellow)
+        dis.blit(title_txt, (dis_width // 2 - title_txt.get_width() // 2, 180))
+        
+        prompt_txt = font_style.render("Введите ваше имя:", True, white)
+        dis.blit(prompt_txt, (dis_width // 2 - prompt_txt.get_width() // 2, 280))
+        
+        input_box = pygame.Rect(dis_width // 2 - 175, 340, 350, 55)
+        pygame.draw.rect(dis, black, input_box)
+        pygame.draw.rect(dis, yellow, input_box, 3)
+        
+        name_surface = font_style.render(player_name, True, green)
+        dis.blit(name_surface, (input_box.x + 15, input_box.y + 12))
+        
+        hint_txt = font_style.render("Нажмите Enter для начала игры", True, yellow)
+        dis.blit(hint_txt, (dis_width // 2 - hint_txt.get_width() // 2, 430))
+        
+        pygame.display.update()
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                quit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_RETURN:
+                    if player_name.strip() != "":
+                        name_input_active = False
+                elif event.key == pygame.K_BACKSPACE:
+                    player_name = player_name[:-1]
+                else:
+                    if len(player_name) < 15 and event.unicode.isprintable():
+                        player_name += event.unicode
+                        
+    return player_name.strip()
+
+def gameLoop(player_name):
     game_over = False
     game_close = False
     x1 = round((dis_width / 2) / float(snake_block)) * snake_block
@@ -119,6 +199,7 @@ def gameLoop():
     snake_List = []
     Length_of_snake = 1
     current_score = 0
+    high_score = get_high_score(player_name)
     foods_count = 2  
     max_foods = 15  
     foods = [spawn_food() for _ in range(foods_count)]
@@ -127,11 +208,12 @@ def gameLoop():
     last_laser_time = 0  
     laser_cooldown = 5.0 
     beam_width = snake_block 
+
     while not game_over:
         while game_close == True:
             draw_environment()
             message("Вы проиграли! Нажмите Q для выхода или C для повторной игры", red)
-            Your_score(current_score)
+            Your_score(current_score, player_name, high_score)
             pygame.display.update()
             for event in pygame.event.get():
                 if event.type == pygame.KEYDOWN:
@@ -139,7 +221,7 @@ def gameLoop():
                         game_over = True
                         game_close = False
                     if event.key == pygame.K_c:
-                        gameLoop()
+                        gameLoop(player_name)
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 game_over = True
@@ -148,10 +230,10 @@ def gameLoop():
                     current_time = time.time()
                     if current_time - last_laser_time >= laser_cooldown:
                         last_laser_time = current_time
-                        laser_active = 5  # Лазер виден 5 кадров
+                        laser_active = 5
                         dx, dy = x1_change, y1_change
                         if dx == 0 and dy == 0:
-                            dy = -snake_block  # По умолчанию вверх
+                            dy = -snake_block
                         laser_dir = (dx, dy)
 
                 elif event.key == pygame.K_LEFT and x1_change != snake_block:
@@ -192,7 +274,7 @@ def gameLoop():
         if laser_active > 0 and laser_dir:
             dx, dy = laser_dir
             hit_foods = []
-            if dx > 0:  # Вправо
+            if dx > 0:
                 start_x, end_x, y_pos = x1 + snake_block, dis_width - snake_block, y1
                 for food in foods:
                     if abs(food[1] - y1) <= beam_width and food[0] >= x1:
@@ -200,7 +282,7 @@ def gameLoop():
                 laser_w = int(max(1, end_x - start_x))
                 scaled_laser = pygame.transform.scale(laser_img, (laser_w, beam_width))
                 dis.blit(scaled_laser, (start_x, y_pos))
-            elif dx < 0:  # Влево
+            elif dx < 0:
                 start_x, end_x, y_pos = snake_block, x1, y1
                 for food in foods:
                     if abs(food[1] - y1) <= beam_width and food[0] <= x1:
@@ -208,7 +290,7 @@ def gameLoop():
                 laser_w = int(max(1, end_x - start_x))
                 scaled_laser = pygame.transform.scale(laser_img, (laser_w, beam_width))
                 dis.blit(scaled_laser, (start_x, y_pos))
-            elif dy > 0:  # Вниз
+            elif dy > 0:
                 x_pos, start_y, end_y = x1, y1 + snake_block, dis_height - snake_block
                 for food in foods:
                     if abs(food[0] - x1) <= beam_width and food[1] >= y1:
@@ -217,7 +299,7 @@ def gameLoop():
                 rotated_laser = pygame.transform.rotate(laser_img, 90)
                 scaled_laser = pygame.transform.scale(rotated_laser, (beam_width, laser_h))
                 dis.blit(scaled_laser, (x_pos, start_y))
-            elif dy < 0:  # Вверх
+            elif dy < 0:
                 x_pos, start_y, end_y = x1, snake_block, y1
                 for food in foods:
                     if abs(food[0] - x1) <= beam_width and food[1] <= y1:
@@ -231,7 +313,7 @@ def gameLoop():
                 if food in foods:
                     foods.remove(food)
                     foods.append(spawn_food())
-                    current_score += 2  # x2 очки за уничтожение лазером!
+                    current_score += 2 
                     Length_of_snake += 1
                     if current_score % 2 == 0 and len(foods) < max_foods:
                         foods.append(spawn_food())
@@ -245,13 +327,17 @@ def gameLoop():
             laser_txt = font_style.render("Лазер [Z]: ГОТОВ", True, green)
         dis.blit(laser_txt, [dis_width - snake_block - 240, 10])
 
-        Your_score(current_score)
+        if current_score > high_score:
+            high_score = current_score
+            save_high_score(player_name, high_score)
+
+        Your_score(current_score, player_name, high_score)
         pygame.display.update()
         for food in foods:
             if abs(x1 - food[0]) < snake_block and abs(y1 - food[1]) < snake_block:
                 foods.remove(food)
                 foods.append(spawn_food())
-                current_score += 1  # Обычное съедание дает +1 очко
+                current_score += 1  
                 Length_of_snake += 1
                 if current_score % 2 == 0 and len(foods) < max_foods:
                     foods.append(spawn_food())
@@ -259,4 +345,8 @@ def gameLoop():
         clock.tick(snake_speed)
     pygame.quit()
     quit()
-gameLoop()
+
+if __name__ == "__main__":
+    init_db()
+    player_name = get_player_name()
+    gameLoop(player_name)
